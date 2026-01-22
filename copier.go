@@ -380,6 +380,84 @@ func copier(toValue interface{}, fromValue interface{}, opt Option) (err error) 
 					toField := fieldByName(dest, destFieldName, opt.CaseSensitive)
 					if toField.IsValid() {
 						if toField.CanSet() {
+
+							// ---------------------------
+							// Date fields: string <-> time.Time/*time.Time
+							// Field name rule: ends with Date / _date (implemented in date_field.go)
+							// ---------------------------
+							if isDateField(destFieldName) {
+
+								// string -> *time.Time / time.Time
+								if fromField.IsValid() && fromField.Type() == typeString {
+									s := fromField.Interface().(string)
+
+									// to *time.Time
+									if toField.Type() == typeTimePtr {
+										tp, err := parseISODateString(s) // from date_field.go
+										if err != nil {
+											return err
+										}
+										if tp == nil {
+											toField.Set(reflect.Zero(typeTimePtr))
+										} else {
+											toField.Set(reflect.ValueOf(tp))
+										}
+										// mark copied and continue
+										if fieldFlags != 0 {
+											flgs.BitFlags[name] = fieldFlags | hasCopied
+										}
+										continue
+									}
+
+									// to time.Time
+									if toField.Type() == typeTime {
+										tp, err := parseISODateString(s)
+										if err != nil {
+											return err
+										}
+										if tp == nil {
+											toField.Set(reflect.Zero(typeTime))
+										} else {
+											toField.Set(reflect.ValueOf(*tp))
+										}
+										if fieldFlags != 0 {
+											flgs.BitFlags[name] = fieldFlags | hasCopied
+										}
+										continue
+									}
+								}
+
+								// *time.Time / time.Time -> string
+								if toField.Type() == typeString {
+									// from *time.Time
+									if fromField.Type() == typeTimePtr {
+										if fromField.IsNil() {
+											toField.SetString("")
+										} else {
+											t := fromField.Elem().Interface().(time.Time)
+											toField.SetString(t.In(time.UTC).Format(isoDateLayout))
+										}
+										if fieldFlags != 0 {
+											flgs.BitFlags[name] = fieldFlags | hasCopied
+										}
+										continue
+									}
+
+									// from time.Time
+									if fromField.Type() == typeTime {
+										t := fromField.Interface().(time.Time)
+										toField.SetString(t.In(time.UTC).Format(isoDateLayout))
+										if fieldFlags != 0 {
+											flgs.BitFlags[name] = fieldFlags | hasCopied
+										}
+										continue
+									}
+								}
+							}
+							// ---------------------------
+							// end date special-case
+							// ---------------------------
+
 							isSet, err := set(toField, fromField, opt.DeepCopy, converters)
 							if err != nil {
 								return err
@@ -390,21 +468,8 @@ func copier(toValue interface{}, fromValue interface{}, opt Option) (err error) 
 								}
 							}
 							if fieldFlags != 0 {
-								// Note that a copy was made
 								flgs.BitFlags[name] = fieldFlags | hasCopied
 							}
-						}
-					} else {
-						// try to set to method
-						var toMethod reflect.Value
-						if dest.CanAddr() {
-							toMethod = dest.Addr().MethodByName(destFieldName)
-						} else {
-							toMethod = dest.MethodByName(destFieldName)
-						}
-
-						if toMethod.IsValid() && toMethod.Type().NumIn() == 1 && fromField.Type().AssignableTo(toMethod.Type().In(0)) {
-							toMethod.Call([]reflect.Value{fromField})
 						}
 					}
 				}
@@ -580,6 +645,8 @@ var (
 	typeTimePtr    = reflect.TypeOf((*time.Time)(nil))
 	typeProtoTS    = reflect.TypeOf(timestamppb.Timestamp{})
 	typeProtoTSPtr = reflect.TypeOf((*timestamppb.Timestamp)(nil))
+
+	typeString = reflect.TypeOf("")
 )
 
 // tries to convert between time.Time <-> protobuf Timestamp (timestamppb.Timestamp)

@@ -3,7 +3,7 @@ package copier_test
 import (
 	"testing"
 
-	"github.com/jinzhu/copier"
+	"github.com/2group/copier"
 )
 
 type EmployeeTags struct {
