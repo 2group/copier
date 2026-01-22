@@ -7,7 +7,10 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // These flags define options for tag handling
@@ -572,11 +575,126 @@ func indirectType(reflectType reflect.Type) (_ reflect.Type, isPtr bool) {
 	return reflectType, isPtr
 }
 
+var (
+	typeTime       = reflect.TypeOf(time.Time{})
+	typeTimePtr    = reflect.TypeOf((*time.Time)(nil))
+	typeProtoTS    = reflect.TypeOf(timestamppb.Timestamp{})
+	typeProtoTSPtr = reflect.TypeOf((*timestamppb.Timestamp)(nil))
+)
+
+// tries to convert between time.Time <-> protobuf Timestamp (timestamppb.Timestamp)
+func trySetTimeProtoTimestamp(to, from reflect.Value) (bool, error) {
+	if !from.IsValid() {
+		return false, nil
+	}
+
+	// unwrap interface values
+	if from.Kind() == reflect.Interface && !from.IsNil() {
+		from = from.Elem()
+	}
+	if to.Kind() == reflect.Interface && !to.IsNil() {
+		to = to.Elem()
+	}
+
+	// ---------------------------
+	// from time.Time / *time.Time -> to *timestamppb.Timestamp / timestamppb.Timestamp
+	// ---------------------------
+
+	// normalize src time
+	var srcTime time.Time
+	var hasTime bool
+
+	switch from.Type() {
+	case typeTime:
+		srcTime = from.Interface().(time.Time)
+		hasTime = true
+	case typeTimePtr:
+		if from.IsNil() {
+			hasTime = false
+		} else {
+			srcTime = from.Elem().Interface().(time.Time)
+			hasTime = true
+		}
+	}
+
+	if hasTime {
+		// destination is pointer (*timestamppb.Timestamp)
+		if to.Kind() == reflect.Ptr && to.Type() == typeProtoTSPtr {
+			to.Set(reflect.ValueOf(timestamppb.New(srcTime)))
+			return true, nil
+		}
+
+		// destination is value (timestamppb.Timestamp)
+		if to.Type() == typeProtoTS {
+			ts := timestamppb.New(srcTime)
+			to.Set(reflect.ValueOf(*ts))
+			return true, nil
+		}
+	} else {
+		// from is nil *time.Time, set destination to nil/zero if it's timestamp
+		if from.Type() == typeTimePtr {
+			if to.Kind() == reflect.Ptr && to.Type() == typeProtoTSPtr {
+				to.Set(reflect.Zero(typeProtoTSPtr))
+				return true, nil
+			}
+			if to.Type() == typeProtoTS {
+				to.Set(reflect.Zero(typeProtoTS))
+				return true, nil
+			}
+		}
+	}
+
+	// ---------------------------
+	// from *timestamppb.Timestamp / timestamppb.Timestamp -> to time.Time / *time.Time
+	// ---------------------------
+	if to.Type() == typeTime {
+		if from.Type() == typeProtoTSPtr {
+			if from.IsNil() {
+				to.Set(reflect.Zero(typeTime))
+				return true, nil
+			}
+			to.Set(reflect.ValueOf(from.Interface().(*timestamppb.Timestamp).AsTime()))
+			return true, nil
+		}
+		if from.Type() == typeProtoTS {
+			ts := from.Interface().(timestamppb.Timestamp)
+			to.Set(reflect.ValueOf(ts.AsTime()))
+			return true, nil
+		}
+	}
+
+	if to.Type() == typeTimePtr {
+		if from.Type() == typeProtoTSPtr {
+			if from.IsNil() {
+				to.Set(reflect.Zero(typeTimePtr))
+				return true, nil
+			}
+			t := from.Interface().(*timestamppb.Timestamp).AsTime()
+			to.Set(reflect.ValueOf(&t))
+			return true, nil
+		}
+		if from.Type() == typeProtoTS {
+			ts := from.Interface().(timestamppb.Timestamp)
+			t := ts.AsTime()
+			to.Set(reflect.ValueOf(&t))
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func set(to, from reflect.Value, deepCopy bool, converters map[converterPair]TypeConverter) (bool, error) {
 	if !from.IsValid() {
 		return true, nil
 	}
 	if ok, err := lookupAndCopyWithConverter(to, from, converters); err != nil {
+		return false, err
+	} else if ok {
+		return true, nil
+	}
+
+	if ok, err := trySetTimeProtoTimestamp(to, from); err != nil {
 		return false, err
 	} else if ok {
 		return true, nil
