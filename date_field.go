@@ -11,7 +11,7 @@ func isDateField(fieldName string) bool {
 	// Go struct field names: TestDate, BirthDate, StartDate, EndDate...
 	// Also support *_date style if you ever map tags/names
 	n := strings.ToLower(fieldName)
-	return strings.HasSuffix(n, "date") || strings.HasSuffix(n, "_date")
+	return strings.HasSuffix(n, "date") || strings.HasSuffix(n, "_date") || strings.HasSuffix(n, "Date")
 }
 
 func parseISODateString(s string) (*time.Time, error) {
