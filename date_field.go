@@ -32,3 +32,18 @@ func formatISODate(t *time.Time) string {
 	}
 	return t.In(time.UTC).Format(isoDateLayout)
 }
+
+func parseISODateStringPtr(s *string) (*time.Time, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return parseISODateString(*s)
+}
+
+func formatISODatePtr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.In(time.UTC).Format(isoDateLayout)
+	return &s
+}

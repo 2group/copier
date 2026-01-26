@@ -387,36 +387,49 @@ func copier(toValue interface{}, fromValue interface{}, opt Option) (err error) 
 							// ---------------------------
 							if isDateField(destFieldName) {
 
-								// string -> *time.Time / time.Time
-								if fromField.IsValid() && fromField.Type() == typeString {
-									s := fromField.Interface().(string)
+								// ---------------------------
+								// string / *string -> *time.Time / time.Time
+								// ---------------------------
+								if toField.Type() == typeTimePtr || toField.Type() == typeTime {
 
-									// to *time.Time
-									if toField.Type() == typeTimePtr {
-										tp, err := parseISODateString(s) // from date_field.go
-										if err != nil {
-											return err
+									var (
+										tp  *time.Time
+										err error
+									)
+
+									switch fromField.Type() {
+									case typeString:
+										tp, err = parseISODateString(fromField.Interface().(string))
+									case typeStringPtr:
+										if fromField.IsNil() {
+											tp = nil
+										} else {
+											s := fromField.Elem().Interface().(string)
+											tp, err = parseISODateString(s)
 										}
+									}
+
+									if err != nil {
+										return err
+									}
+
+									// set destination
+									if toField.Type() == typeTimePtr {
 										if tp == nil {
-											toField.Set(reflect.Zero(typeTimePtr))
+											toField.Set(reflect.Zero(typeTimePtr)) // nil *time.Time
 										} else {
 											toField.Set(reflect.ValueOf(tp))
 										}
-										// mark copied and continue
 										if fieldFlags != 0 {
 											flgs.BitFlags[name] = fieldFlags | hasCopied
 										}
 										continue
 									}
 
-									// to time.Time
+									// to time.Time value
 									if toField.Type() == typeTime {
-										tp, err := parseISODateString(s)
-										if err != nil {
-											return err
-										}
 										if tp == nil {
-											toField.Set(reflect.Zero(typeTime))
+											toField.Set(reflect.Zero(typeTime)) // zero time.Time
 										} else {
 											toField.Set(reflect.ValueOf(*tp))
 										}
@@ -427,15 +440,32 @@ func copier(toValue interface{}, fromValue interface{}, opt Option) (err error) 
 									}
 								}
 
-								// *time.Time / time.Time -> string
-								if toField.Type() == typeString {
-									// from *time.Time
-									if fromField.Type() == typeTimePtr {
+								// ---------------------------
+								// *time.Time / time.Time -> string / *string
+								// ---------------------------
+								if toField.Type() == typeString || toField.Type() == typeStringPtr {
+
+									var tp *time.Time
+
+									switch fromField.Type() {
+									case typeTime:
+										t := fromField.Interface().(time.Time)
+										tp = &t
+									case typeTimePtr:
 										if fromField.IsNil() {
-											toField.SetString("")
+											tp = nil
 										} else {
 											t := fromField.Elem().Interface().(time.Time)
-											toField.SetString(t.In(time.UTC).Format(isoDateLayout))
+											tp = &t
+										}
+									}
+
+									// to string
+									if toField.Type() == typeString {
+										if tp == nil {
+											toField.SetString("")
+										} else {
+											toField.SetString(tp.In(time.UTC).Format(isoDateLayout))
 										}
 										if fieldFlags != 0 {
 											flgs.BitFlags[name] = fieldFlags | hasCopied
@@ -443,10 +473,14 @@ func copier(toValue interface{}, fromValue interface{}, opt Option) (err error) 
 										continue
 									}
 
-									// from time.Time
-									if fromField.Type() == typeTime {
-										t := fromField.Interface().(time.Time)
-										toField.SetString(t.In(time.UTC).Format(isoDateLayout))
+									// to *string  ✅ this preserves NULL as nil pointer (not "")
+									if toField.Type() == typeStringPtr {
+										sp := formatISODatePtr(tp) // nil -> nil, else -> *string
+										if sp == nil {
+											toField.Set(reflect.Zero(typeStringPtr)) // nil *string
+										} else {
+											toField.Set(reflect.ValueOf(sp))
+										}
 										if fieldFlags != 0 {
 											flgs.BitFlags[name] = fieldFlags | hasCopied
 										}
@@ -454,6 +488,7 @@ func copier(toValue interface{}, fromValue interface{}, opt Option) (err error) 
 									}
 								}
 							}
+
 							// ---------------------------
 							// end date special-case
 							// ---------------------------
@@ -643,10 +678,10 @@ func indirectType(reflectType reflect.Type) (_ reflect.Type, isPtr bool) {
 var (
 	typeTime       = reflect.TypeOf(time.Time{})
 	typeTimePtr    = reflect.TypeOf((*time.Time)(nil))
+	typeString     = reflect.TypeOf("")
+	typeStringPtr  = reflect.TypeOf((*string)(nil)) // ✅ add this
 	typeProtoTS    = reflect.TypeOf(timestamppb.Timestamp{})
 	typeProtoTSPtr = reflect.TypeOf((*timestamppb.Timestamp)(nil))
-
-	typeString = reflect.TypeOf("")
 )
 
 // tries to convert between time.Time <-> protobuf Timestamp (timestamppb.Timestamp)
